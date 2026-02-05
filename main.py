@@ -5,6 +5,7 @@ import time
 import os
 from datetime import datetime
 import ctypes
+from ctypes import wintypes
 import sys
 
 #region Youtube API
@@ -133,7 +134,7 @@ def set_windows_file_times(path, dt):
     low = intervals & 0xFFFFFFFF
     high = intervals >> 32
 
-    filetime = ctypes.wintypes.FILETIME(low, high)
+    filetime = wintypes.FILETIME(low, high)
 
     ctypes.windll.kernel32.SetFileTime(
         handle,
@@ -145,7 +146,7 @@ def set_windows_file_times(path, dt):
     ctypes.windll.kernel32.CloseHandle(handle)
 
 
-def save_list_of_videos_from_list(links:list, format:str, output_dir:str):
+def save_list_of_videos_from_list(links:list, format:str, output_dir:str, cookies_browser:str, js_runtime:str):
     total = len(links)
     for i, line in enumerate(links):
         date_str, url = line[0], line[1]
@@ -153,12 +154,42 @@ def save_list_of_videos_from_list(links:list, format:str, output_dir:str):
         
         print(f"[{i+1}/{total}] Processing {url}...")
         try:
-            save_video(url, dt, format, output_dir)
+            save_video(url, dt, format, output_dir, cookies_browser, js_runtime)
         except Exception as e:
             print(f"Failed to process {url}: {e}")
 
 
-def save_video(url:str, date:datetime, format:str, output_dir:str):
+def save_list_of_videos_from_txt_file(handle: str, format: str, cookies_browser: str, js_runtime: str):
+    """
+    Reads ./saved/{handle}/video_list.txt and saves all listed videos.
+    """
+    base_dir = os.path.join("saved", handle)
+    txt_path = os.path.join(base_dir, "video_list.txt")
+
+    if not os.path.exists(txt_path):
+        raise FileNotFoundError(f"Video list not found: {txt_path}")
+
+    with open(txt_path, "r", encoding="utf-8") as f:
+        lines = [line.strip() for line in f if line.strip()]
+
+    total = len(lines)
+    for i, line in enumerate(lines):
+        try:
+            date_str, url = line.split(maxsplit=1)
+            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+        except ValueError:
+            print(f"Skipping invalid line: {line}")
+            continue
+
+        print(f"[{i+1}/{total}] Processing {url}...")
+        try:
+            save_video(url, dt, format, base_dir, cookies_browser, js_runtime)
+        except Exception as e:
+            print(f"Failed to process {url}: {e}")
+
+
+
+def save_video(url:str, date:datetime, format:str, output_dir:str, cookies_browser:str, js_runtime:str):
     # Snapshot files in the specific output directory
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -168,18 +199,22 @@ def save_video(url:str, date:datetime, format:str, output_dir:str):
     # Construct the output path template for yt-dlp
     # This automatically saves it into the correct folder
     output_template = os.path.join(output_dir, "%(title)s.%(ext)s")
-
-    cmd = [
-        ".\\yt-dlp.exe",
+    
+    cmd = [".\\yt-dlp.exe"]
+    if cookies_browser:
+        cmd.extend(["--cookies-from-browser", cookies_browser])
+    if js_runtime:
+        cmd.extend(["--js-runtimes", js_runtime])
+    cmd.extend([
         "--embed-subs",
         "--embed-thumbnail",
         "--embed-metadata",
         "--embed-chapters",
         "--embed-info-json",
-        "--remux-video", format,  # Correct flag for container format
-        "-o", output_template,    # Save to specific directory
+        "--remux-video", format,
+        "-o", output_template,
         url
-    ]
+    ])
 
     # Run yt-dlp
     retry_count = 0
@@ -234,15 +269,56 @@ def save_video(url:str, date:datetime, format:str, output_dir:str):
 
 #region Main Commands
 
-def download_channel():
+def get_main_input():
+    cmd = input("What do you want to do?"
+    "\n[1] Download an entire channel"
+    "\n[2] Download an entire channel from the video list file (backup option)" \
+    "\n[3] Update yt-dlp" \
+    "\n[4] Quit"
+    "\n>")
+    if cmd not in ["1", "2", "3", "4"]:
+        print("Invalid input. Try again.")
+        cmd = get_main_input()
+    return cmd
+
+
+def get_download_input():
     API_KEY = get_api_key()
     HANDLE = input("Enter channel handle (e.g. @ChannelName): \n>")
     
     _formatInput = input("Do you want to save the videos as MP4 instead of MKV? (Y/n) \n>")
     FORMAT = "mkv" if _formatInput.strip().lower() == "n" else "mp4"
 
+    COOKIES = None
+    JS_RUNTIME = None
+
+    # Cookies
+    _cookies_input = input("Do you want to use cookies from your browser? (input the name of your browser): \n>")
+    if _cookies_input.lower() in ["firefox", "chrome", "safari"]:
+        COOKIES = _cookies_input.lower()
+
+        # JS Runtime
+        _js_runtime = input("Do you want to use a JS runtime from your browser? (input the name of your browser): \n>")
+        if _js_runtime.lower() in ["deno", "node", "bun", "quickjs"]:
+            JS_RUNTIME = _js_runtime.lower()
+        else:
+            print("JS runtime name not recognized. It won't be used this time.")
+
+    else:
+        print("Browser name not recognized. Cookies won't be used this time.")
+    
+    return {
+        "API_KEY": API_KEY,
+        "HANDLE": HANDLE,
+        "FORMAT": FORMAT,
+        "COOKIES": COOKIES,
+        "JS_RUNTIME": JS_RUNTIME,
+    }
+
+
+def download_channel(api_key:str, handle:str, format:str, cookies:str, js_runtime:str):
     # 1. Define and Create Directory Path: ./saved/{handle}
-    clean_handle = HANDLE.replace("@", "").strip()
+    clean_handle = handle.replace("@", "").strip()
     # Path is now ./saved/handle_name
     folder_path = os.path.join("saved", clean_handle)
 
@@ -251,18 +327,35 @@ def download_channel():
         print(f"Created directory: {folder_path}")
 
     # 2. Get Channel ID safely
-    CHANNEL_ID = get_channel_id(API_KEY, HANDLE)
+    CHANNEL_ID = get_channel_id(api_key, handle)
     print(f"Found Channel ID: {CHANNEL_ID}")
 
     # 3. Get Links
     # Save the list inside the specific handle folder
     list_output_path = os.path.join(folder_path, "video_list.txt")
-    VIDEO_LINKS = get_list_of_video_links(API_KEY, CHANNEL_ID, list_output_path)
+    VIDEO_LINKS = get_list_of_video_links(api_key, CHANNEL_ID, list_output_path)
     
     # 4. Save Videos to the new path
-    save_list_of_videos_from_list(VIDEO_LINKS, FORMAT, folder_path)
+    save_list_of_videos_from_list(VIDEO_LINKS, format, folder_path, cookies, js_runtime)
     
     print(f"\nAll tasks completed. Videos are in: {folder_path}")
+
+
+def download_channel_from_txt_file(api_key:str, handle:str, format:str, cookies:str, js_runtime:str):
+    # 1. Define and Create Directory Path: ./saved/{handle}
+    clean_handle = handle.replace("@", "").strip()
+    # Path is now ./saved/handle_name
+    folder_path = os.path.join("saved", clean_handle)
+
+    # 2. Get Channel ID safely
+    CHANNEL_ID = get_channel_id(api_key, handle)
+    print(f"Found Channel ID: {CHANNEL_ID}")
+    
+    # 4. Save Videos
+    save_list_of_videos_from_txt_file(clean_handle, format, cookies, js_runtime)
+    
+    print(f"\nAll tasks completed. Videos are in: {folder_path}")
+
 
 def update_yt_dlp():
     cmd = [
@@ -270,17 +363,6 @@ def update_yt_dlp():
         "-U"
     ]
     subprocess.run(cmd, capture_output=False)
-
-def get_main_input():
-    cmd = input("What do you want to do?"
-    "\n[1] Download an entire channel"
-    "\n[2] Update yt-dlp" \
-    "\n[3] Quit"
-    "\n>")
-    if cmd not in ["1", "2", "3"]:
-        print("Invalid input. Try again.")
-        cmd = get_main_input()
-    return cmd
 
 #endregion
 
@@ -291,10 +373,15 @@ if __name__ == "__main__":
 
         match cmd:
             case "1":
-                download_channel()
+                _ = get_download_input()
+                download_channel(_["API_KEY"], _["HANDLE"], _["FORMAT"], _["COOKIES"], _["JS_RUNTIME"])
             case "2":
-                update_yt_dlp()
+                print("INFO: This option is meant to be used as a way to resume where the previous attempted failed. Remove the lines from video_list.txt until the point where you left off.")
+                _ = get_download_input()
+                download_channel_from_txt_file(_["API_KEY"], _["HANDLE"], _["FORMAT"], _["COOKIES"], _["JS_RUNTIME"])
             case "3":
+                update_yt_dlp()
+            case "4":
                 quit()
 
-        print("\n\n----- TASK COMPLETED -----\n")
+        print("\n----- TASK COMPLETED -----\n")
