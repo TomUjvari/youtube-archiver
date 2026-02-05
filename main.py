@@ -232,13 +232,14 @@ def save_video(url:str, date:datetime, format:str, output_dir:str):
 
 #endregion
 
-# Main execution
-if __name__ == "__main__":
+#region Main Commands
+
+def download_channel():
     API_KEY = get_api_key()
     HANDLE = input("Enter channel handle (e.g. @ChannelName): \n>")
     
     _formatInput = input("Do you want to save the videos as MP4 instead of MKV? (Y/n) \n>")
-    FORMAT = "mp4" if _formatInput.strip().lower() == "y" else "mkv"
+    FORMAT = "mkv" if _formatInput.strip().lower() == "n" else "mp4"
 
     # 1. Define and Create Directory Path: ./saved/{handle}
     clean_handle = HANDLE.replace("@", "").strip()
@@ -262,3 +263,38 @@ if __name__ == "__main__":
     save_list_of_videos_from_list(VIDEO_LINKS, FORMAT, folder_path)
     
     print(f"\nAll tasks completed. Videos are in: {folder_path}")
+
+def update_yt_dlp():
+    cmd = [
+        ".\\yt-dlp.exe",
+        "-U"
+    ]
+    subprocess.run(cmd, capture_output=False)
+
+def get_main_input():
+    cmd = input("What do you want to do?"
+    "\n[1] Download an entire channel"
+    "\n[2] Update yt-dlp" \
+    "\n[3] Quit"
+    "\n>")
+    if cmd not in ["1", "2", "3"]:
+        print("Invalid input. Try again.")
+        cmd = get_main_input()
+    return cmd
+
+#endregion
+
+# Main Process
+if __name__ == "__main__":
+    while True:
+        cmd = get_main_input()
+
+        match cmd:
+            case "1":
+                download_channel()
+            case "2":
+                update_yt_dlp()
+            case "3":
+                quit()
+
+        print("\n\n----- TASK COMPLETED -----\n")
