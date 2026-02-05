@@ -97,6 +97,29 @@ def get_list_of_video_links(api_key:str, channel_id:str, output_file:str = None)
 
     return videos
 
+
+def get_video_publish_date(api_key: str, video_url: str) -> datetime:
+    # Extract video ID
+    if "v=" in video_url:
+        video_id = video_url.split("v=")[1].split("&")[0]
+    elif "youtu.be/" in video_url:
+        video_id = video_url.split("youtu.be/")[1].split("?")[0]
+    else:
+        raise ValueError("Invalid YouTube URL")
+
+    url = (
+        "https://www.googleapis.com/youtube/v3/videos"
+        f"?part=snippet&id={video_id}&key={api_key}"
+    )
+    data = requests.get(url).json()
+
+    if not data.get("items"):
+        raise RuntimeError("Could not retrieve video metadata")
+
+    published_at = data["items"][0]["snippet"]["publishedAt"]
+    return datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+
+
 #endregion
 
 #region Video Saving
@@ -270,21 +293,29 @@ def save_video(url:str, date:datetime, format:str, output_dir:str, cookies_brows
 #region Main Commands
 
 def get_main_input():
-    cmd = input("What do you want to do?"
-    "\n[1] Download an entire channel"
-    "\n[2] Download an entire channel from the video list file (backup option)" \
-    "\n[3] Update yt-dlp" \
-    "\n[4] Quit"
-    "\n>")
-    if cmd not in ["1", "2", "3", "4"]:
+    cmd = input(
+        "What do you want to do?"
+        "\n[1] Download an entire channel"
+        "\n[2] Download an entire channel from the video list file (backup option)"
+        "\n[3] Download a single video by URL"
+        "\n[4] Update yt-dlp"
+        "\n[5] Quit"
+        "\n>"
+    )
+    if cmd not in ["1", "2", "3", "4", "5"]:
         print("Invalid input. Try again.")
-        cmd = get_main_input()
+        return get_main_input()
     return cmd
 
 
-def get_download_input():
+
+def get_download_input(single_mode:bool = False):
     API_KEY = get_api_key()
-    HANDLE = input("Enter channel handle (e.g. @ChannelName): \n>")
+
+    if single_mode:
+        VIDEO_URL = input("Enter video URL: \n>").strip()
+    else:
+        HANDLE = input("Enter channel handle (e.g. @ChannelName): \n>")
     
     _formatInput = input("Do you want to save the videos as MP4 instead of MKV? (Y/n) \n>")
     FORMAT = "mkv" if _formatInput.strip().lower() == "n" else "mp4"
@@ -307,13 +338,18 @@ def get_download_input():
     else:
         print("Browser name not recognized. Cookies won't be used this time.")
     
-    return {
+    result = {
         "API_KEY": API_KEY,
-        "HANDLE": HANDLE,
         "FORMAT": FORMAT,
         "COOKIES": COOKIES,
         "JS_RUNTIME": JS_RUNTIME,
     }
+    if single_mode:
+        result["VIDEO_URL"] = VIDEO_URL
+    else:
+        result["HANDLE"] = HANDLE,
+    
+    return  result
 
 
 def download_channel(api_key:str, handle:str, format:str, cookies:str, js_runtime:str):
@@ -357,6 +393,21 @@ def download_channel_from_txt_file(api_key:str, handle:str, format:str, cookies:
     print(f"\nAll tasks completed. Videos are in: {folder_path}")
 
 
+def download_single_video(api_key: str, url: str, format: str, cookies: str, js_runtime: str):
+    output_dir = input("Enter output directory (default: ./saved/single):\n>").strip()
+
+    if not output_dir:
+        output_dir = os.path.join("saved", "single")
+
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    dt = get_video_publish_date(api_key, url)
+    print(f"Video publish date: {dt.isoformat()}")
+
+    save_video(url, dt, format, output_dir, cookies, js_runtime)
+
+
 def update_yt_dlp():
     cmd = [
         ".\\yt-dlp.exe",
@@ -376,12 +427,16 @@ if __name__ == "__main__":
                 _ = get_download_input()
                 download_channel(_["API_KEY"], _["HANDLE"], _["FORMAT"], _["COOKIES"], _["JS_RUNTIME"])
             case "2":
-                print("INFO: This option is meant to be used as a way to resume where the previous attempted failed. Remove the lines from video_list.txt until the point where you left off.")
+                print("INFO: This option is meant to be used as a way to resume where the previous attempted failed.")
                 _ = get_download_input()
                 download_channel_from_txt_file(_["API_KEY"], _["HANDLE"], _["FORMAT"], _["COOKIES"], _["JS_RUNTIME"])
             case "3":
-                update_yt_dlp()
+                _ = get_download_input(single_mode=True)
+                download_single_video(_["API_KEY"], _["VIDEO_URL"], _["FORMAT"], _["COOKIES"], _["JS_RUNTIME"])
             case "4":
+                update_yt_dlp()
+            case "5":
                 quit()
+
 
         print("\n----- TASK COMPLETED -----\n")
