@@ -7,6 +7,6 @@ This project allows you to archive an entire Youtube channel's content with thei
 - Python with the `requests` library installed.   
 
 > [!NOTE]
-> You might get flagged as a bot. It is highly recommended to install the `yt-dlp-ejs` python library and a [supported javascript runtime](https://github.com/yt-dlp/yt-dlp/wiki/EJS) in order to avoid detection. The program will ask you for the browser to get cookies from (firefox/chrome/safari) as well as your Javascript runtime (deno/node/bun/quickjs).
+> You might get flagged as a bot. It is highly recommended to install the `yt-dlp-ejs` python library and a [supported javascript runtime](https://github.com/yt-dlp/yt-dlp/wiki/EJS) in order to avoid detection. The program will ask you for the browser to get cookies from (firefox/chrome) as well as your Javascript runtime (deno/node/bun/quickjs).
 
 For now this project only works for Windows, it will be available for Linux soon.
