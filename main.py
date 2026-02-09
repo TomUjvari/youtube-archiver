@@ -4,10 +4,18 @@ import subprocess
 import time
 import os
 from datetime import datetime
-import ctypes
-from ctypes import wintypes
 import sys
 from urllib.parse import urlparse, parse_qs
+import platform
+
+# Platform detection
+IS_WINDOWS = os.name == 'nt' or platform.system() == 'Windows'
+IS_LINUX = platform.system() == 'Linux'
+
+# Import Windows-specific modules only on Windows
+if IS_WINDOWS:
+    import ctypes
+    from ctypes import wintypes
 
 BASE_URL = "https://www.googleapis.com/youtube/v3"
 
@@ -205,6 +213,9 @@ def set_windows_file_times(path, dt):
     Set creation, access, and modification times on Windows.
     dt must be a timezone-aware UTC datetime.
     """
+    if not IS_WINDOWS:
+        return
+    
     FILE_WRITE_ATTRIBUTES = 0x100
     OPEN_EXISTING = 3
 
@@ -247,32 +258,26 @@ def set_windows_file_times(path, dt):
 
 
 def save_list_of_videos_from_list(links:list, format:str, output_dir:str, cookies_browser:str, js_runtime:str):
-    total = len(links)
-    for i, line in enumerate(links):
-        date_str, url = line[0], line[1]
+    for i, (date, url) in enumerate(links):
+        print(f"[{i+1}/{len(links)}] Processing {url}...")
         try:
-            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-        except ValueError:
-            dt = datetime.now().astimezone() # Fallback
-
-        print(f"[{i+1}/{total}] Processing {url}...")
-        try:
+            dt = datetime.fromisoformat(date.replace("Z", "+00:00"))
             save_video(url, dt, format, output_dir, cookies_browser, js_runtime)
         except Exception as e:
             print(f"Failed to process {url}: {e}")
 
 
-def save_list_of_videos_from_txt_file(handle: str, format: str, cookies_browser: str, js_runtime: str):
-    """
-    Reads ./saved/{handle}/video_list.txt and saves all listed videos.
-    """
+def save_list_of_videos_from_txt_file(handle:str, format:str, cookies_browser:str, js_runtime:str):
+    # Reconstruct the expected file path
     base_dir = os.path.join("saved", handle)
-    txt_path = os.path.join(base_dir, "video_list.txt")
+    video_list_path = os.path.join(base_dir, "video_list.txt")
 
-    if not os.path.exists(txt_path):
-        raise FileNotFoundError(f"Video list not found: {txt_path}")
+    if not os.path.exists(video_list_path):
+        print(f"Error: No such file: {video_list_path}")
+        print("Run option [1] first to generate the video list.")
+        return
 
-    with open(txt_path, "r", encoding="utf-8") as f:
+    with open(video_list_path, "r", encoding="utf-8") as f:
         lines = [line.strip() for line in f if line.strip()]
 
     total = len(lines)
@@ -291,6 +296,14 @@ def save_list_of_videos_from_txt_file(handle: str, format: str, cookies_browser:
             print(f"Failed to process {url}: {e}")
 
 
+def get_ytdlp_command():
+    """Get the appropriate yt-dlp command based on the platform."""
+    if IS_WINDOWS:
+        return ".\\yt-dlp.exe"
+    else:
+        return "yt-dlp"
+
+
 def save_video(url:str, date:datetime, format:str, output_dir:str, cookies_browser:str, js_runtime:str):
     # Snapshot files in the specific output directory
     if not os.path.exists(output_dir):
@@ -301,7 +314,7 @@ def save_video(url:str, date:datetime, format:str, output_dir:str, cookies_brows
     # Construct the output path template for yt-dlp
     output_template = os.path.join(output_dir, "%(title)s.%(ext)s")
     
-    cmd = [".\\yt-dlp.exe"]
+    cmd = [get_ytdlp_command()]
     if cookies_browser:
         cmd.extend(["--cookies-from-browser", cookies_browser])
     if js_runtime:
@@ -361,7 +374,7 @@ def save_video(url:str, date:datetime, format:str, output_dir:str, cookies_brows
     try:
         os.utime(video_path, (ts, ts))
         # Set creation time (Windows only)
-        if os.name == 'nt':
+        if IS_WINDOWS:
             set_windows_file_times(video_path, date)
     except OSError as e:
         print(f"Could not set timestamps on {video_path}: {e}")
@@ -487,14 +500,65 @@ def download_single_video(api_key: str, url: str, format: str, cookies: str, js_
 
 
 def update_yt_dlp():
-    cmd = [".\\yt-dlp.exe", "-U"]
+    cmd = [get_ytdlp_command(), "-U"]
     subprocess.run(cmd, capture_output=False)
+
+
+def check_dependencies():
+    """Check for required dependencies on the current platform."""
+    missing = []
+    
+    # Check for yt-dlp
+    ytdlp_cmd = get_ytdlp_command()
+    try:
+        result = subprocess.run([ytdlp_cmd, "--version"], 
+                              capture_output=True, 
+                              text=True,
+                              timeout=5)
+        if result.returncode != 0:
+            missing.append("yt-dlp")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        missing.append("yt-dlp")
+    
+    # Check for ffmpeg (required for embedding operations)
+    if IS_LINUX:
+        try:
+            result = subprocess.run(["ffmpeg", "-version"], 
+                                  capture_output=True, 
+                                  text=True,
+                                  timeout=5)
+            if result.returncode != 0:
+                missing.append("ffmpeg")
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            missing.append("ffmpeg")
+    
+    if missing:
+        print("\n⚠️  WARNING: Missing dependencies!")
+        print(f"Missing: {', '.join(missing)}\n")
+        
+        if IS_LINUX:
+            print("On Linux, install them with:")
+            if "yt-dlp" in missing:
+                print("  sudo apt install yt-dlp  # or: pip install yt-dlp")
+            if "ffmpeg" in missing:
+                print("  sudo apt install ffmpeg")
+        else:
+            print("Please ensure yt-dlp.exe is in the same directory as this script.")
+            print("Download from: https://github.com/yt-dlp/yt-dlp/releases")
+        
+        print()
+        response = input("Continue anyway? (y/N): ").strip().lower()
+        if response != 'y':
+            sys.exit(1)
 
 #endregion
 
 
 # Main Process
 if __name__ == "__main__":
+    print(f"Running on: {platform.system()}")
+    check_dependencies()
+    
     while True:
         cmd = get_main_input()
 
